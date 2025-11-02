@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { RecordType } from '../App';
-import { Lock, Download, Trash2, Shield, FileText } from 'lucide-react';
+import { Lock, Download, Trash2, Shield, FileText, Upload, Key } from 'lucide-react';
 import { Button } from './ui/button';
 import { Switch } from './ui/switch';
 import { Label } from './ui/label';
@@ -17,6 +17,7 @@ import { DEFAULT_TAXONOMY } from '../lib/hashtagTaxonomy';
 import { generateLawyerReadyReport } from '../lib/reportGenerator';
 import { pdfExport } from '../lib/pdfExport';
 import { indexedDBStorage } from '../lib/storage/indexedDBStorage';
+import { encryptedBackup } from '../lib/storage/encryptedBackup';
 
 function formatDate(dateString: string) {
   const date = new Date(dateString);
@@ -60,6 +61,14 @@ export function SettingsScreen({
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [caseLabel, setCaseLabel] = useState('');
   const [taxonomy, setTaxonomy] = useState(DEFAULT_TAXONOMY);
+  const [showBackupDialog, setShowBackupDialog] = useState(false);
+  const [showRestoreDialog, setShowRestoreDialog] = useState(false);
+  const [backupPassword, setBackupPassword] = useState('');
+  const [confirmBackupPassword, setConfirmBackupPassword] = useState('');
+  const [restorePassword, setRestorePassword] = useState('');
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -244,6 +253,62 @@ export function SettingsScreen({
     }
   };
 
+  const handleCreateBackup = async () => {
+    if (backupPassword.length < 6) {
+      alert('Password must be at least 6 characters');
+      return;
+    }
+    if (backupPassword !== confirmBackupPassword) {
+      alert('Passwords do not match');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      await encryptedBackup.downloadBackup(backupPassword, records);
+      alert('Encrypted backup downloaded successfully!');
+      setShowBackupDialog(false);
+      setBackupPassword('');
+      setConfirmBackupPassword('');
+    } catch (error) {
+      console.error('Backup failed:', error);
+      alert('Failed to create backup. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRestoreBackup = async () => {
+    if (!restoreFile) {
+      alert('Please select a backup file');
+      return;
+    }
+    if (!restorePassword) {
+      alert('Please enter backup password');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const backupData = await encryptedBackup.restoreFromFile(restorePassword, restoreFile);
+      await encryptedBackup.applyBackup(backupData);
+      alert(`Successfully restored ${backupData.records.length} records from backup!`);
+      setShowRestoreDialog(false);
+      setRestorePassword('');
+      setRestoreFile(null);
+      window.location.reload();
+    } catch (error) {
+      console.error('Restore failed:', error);
+      if (error instanceof Error) {
+        alert(error.message);
+      } else {
+        alert('Failed to restore backup. Please check your password and try again.');
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="px-4 py-6">
       {/* Header */}
@@ -360,6 +425,50 @@ export function SettingsScreen({
               disabled={records.length === 0}
             >
               Export as JSON
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Encrypted Backups */}
+      <div className="mb-6">
+        <h3 className="text-slate-900 mb-3 flex items-center gap-2">
+          <Key className="w-5 h-5" />
+          Encrypted Backups
+        </h3>
+
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 divide-y divide-slate-100">
+          <div className="p-4">
+            <div className="flex items-center justify-between mb-2">
+              <Label className="text-slate-900">Download Encrypted Backup</Label>
+              <Download className="w-4 h-4 text-green-600" />
+            </div>
+            <p className="text-sm text-slate-500 mb-3">
+              Create a password-protected backup of all your records and settings
+            </p>
+            <Button
+              onClick={() => setShowBackupDialog(true)}
+              className="w-full bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white"
+              disabled={records.length === 0}
+            >
+              Create Encrypted Backup
+            </Button>
+          </div>
+
+          <div className="p-4">
+            <div className="flex items-center justify-between mb-2">
+              <Label className="text-slate-900">Restore from Backup</Label>
+              <Upload className="w-4 h-4 text-blue-600" />
+            </div>
+            <p className="text-sm text-slate-500 mb-3">
+              Restore your data from a previously saved encrypted backup file
+            </p>
+            <Button
+              onClick={() => setShowRestoreDialog(true)}
+              className="w-full"
+              variant="outline"
+            >
+              Restore Backup
             </Button>
           </div>
         </div>
@@ -597,6 +706,144 @@ export function SettingsScreen({
             </Button>
             <Button variant="destructive" onClick={handleClearData}>
               Clear Everything
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Backup Dialog */}
+      <Dialog open={showBackupDialog} onOpenChange={setShowBackupDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Key className="w-5 h-5 text-green-600" />
+              Create Encrypted Backup
+            </DialogTitle>
+            <DialogDescription>
+              Set a strong password to encrypt your backup file
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="bg-green-50 rounded-lg p-3 border border-green-100">
+              <p className="text-sm text-green-900 leading-relaxed">
+                <strong>Important:</strong> Remember this password! You'll need it to restore your backup.
+                This password encrypts your data with AES-256 encryption.
+              </p>
+            </div>
+            <div>
+              <Label>Backup Password</Label>
+              <Input
+                type="password"
+                value={backupPassword}
+                onChange={(e) => setBackupPassword(e.target.value)}
+                placeholder="At least 6 characters"
+                className="border-green-200 focus:border-green-400"
+                disabled={isProcessing}
+              />
+            </div>
+            <div>
+              <Label>Confirm Password</Label>
+              <Input
+                type="password"
+                value={confirmBackupPassword}
+                onChange={(e) => setConfirmBackupPassword(e.target.value)}
+                placeholder="Re-enter password"
+                className="border-green-200 focus:border-green-400"
+                disabled={isProcessing}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowBackupDialog(false);
+                setBackupPassword('');
+                setConfirmBackupPassword('');
+              }}
+              disabled={isProcessing}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateBackup}
+              className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600"
+              disabled={isProcessing}
+            >
+              {isProcessing ? 'Creating...' : 'Download Backup'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restore Backup Dialog */}
+      <Dialog open={showRestoreDialog} onOpenChange={setShowRestoreDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="w-5 h-5 text-blue-600" />
+              Restore from Backup
+            </DialogTitle>
+            <DialogDescription>
+              Select your encrypted backup file and enter the password
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="bg-yellow-50 rounded-lg p-3 border border-yellow-200">
+              <p className="text-sm text-yellow-900 leading-relaxed">
+                <strong>Warning:</strong> Restoring a backup will replace all current data.
+                Consider creating a backup of your current data first.
+              </p>
+            </div>
+            <div>
+              <Label>Backup File</Label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".encrypted"
+                onChange={(e) => setRestoreFile(e.target.files?.[0] || null)}
+                className="hidden"
+                disabled={isProcessing}
+              />
+              <Button
+                onClick={() => fileInputRef.current?.click()}
+                variant="outline"
+                className="w-full"
+                disabled={isProcessing}
+              >
+                {restoreFile ? restoreFile.name : 'Choose Backup File'}
+              </Button>
+            </div>
+            <div>
+              <Label>Backup Password</Label>
+              <Input
+                type="password"
+                value={restorePassword}
+                onChange={(e) => setRestorePassword(e.target.value)}
+                placeholder="Enter backup password"
+                className="border-blue-200 focus:border-blue-400"
+                disabled={isProcessing}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowRestoreDialog(false);
+                setRestorePassword('');
+                setRestoreFile(null);
+              }}
+              disabled={isProcessing}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRestoreBackup}
+              className="bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600"
+              disabled={isProcessing || !restoreFile}
+            >
+              {isProcessing ? 'Restoring...' : 'Restore Backup'}
             </Button>
           </DialogFooter>
         </DialogContent>

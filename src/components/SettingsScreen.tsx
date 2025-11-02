@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { RecordType } from '../App';
-import { Lock, Download, Trash2, Shield, FileText, Upload, Key } from 'lucide-react';
+import { Lock, Download, Trash2, Shield, FileText, Upload, Key, Cloud, RefreshCw } from 'lucide-react';
 import { Button } from './ui/button';
 import { Switch } from './ui/switch';
 import { Label } from './ui/label';
@@ -18,6 +18,10 @@ import { generateLawyerReadyReport } from '../lib/reportGenerator';
 import { pdfExport } from '../lib/pdfExport';
 import { indexedDBStorage } from '../lib/storage/indexedDBStorage';
 import { encryptedBackup } from '../lib/storage/encryptedBackup';
+import { authService } from '../lib/cloud/authService';
+import { cloudSyncService } from '../lib/cloud/cloudSyncService';
+import { isSupabaseConfigured } from '../lib/cloud/supabaseClient';
+import { CloudAuthDialog } from './CloudAuthDialog';
 
 function formatDate(dateString: string) {
   const date = new Date(dateString);
@@ -69,6 +73,10 @@ export function SettingsScreen({
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showCloudAuthDialog, setShowCloudAuthDialog] = useState(false);
+  const [cloudUser, setCloudUser] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -94,6 +102,14 @@ export function SettingsScreen({
         const lockSetting = localStorage.getItem('recordKeeper_lockEnabled');
         if (lockSetting === 'true') {
           setLockEnabled(true);
+        }
+      }
+
+      // Check for cloud user
+      if (isSupabaseConfigured) {
+        const user = await authService.getCurrentUser();
+        if (user) {
+          setCloudUser(user.email);
         }
       }
     };
@@ -309,6 +325,48 @@ export function SettingsScreen({
     }
   };
 
+  const handleCloudAuthSuccess = (email: string) => {
+    setCloudUser(email);
+    alert('Successfully signed in! Your data will now sync to the cloud.');
+    // Auto-sync after login
+    handleCloudSync();
+  };
+
+  const handleCloudSignOut = async () => {
+    const { error } = await authService.signOut();
+    if (error) {
+      alert('Failed to sign out');
+    } else {
+      setCloudUser(null);
+      setLastSyncTime(null);
+      alert('Signed out successfully');
+    }
+  };
+
+  const handleCloudSync = async () => {
+    if (!cloudUser) {
+      setShowCloudAuthDialog(true);
+      return;
+    }
+
+    setIsSyncing(true);
+    try {
+      const { success, error } = await cloudSyncService.sync(records);
+      if (success) {
+        const now = new Date().toLocaleString();
+        setLastSyncTime(now);
+        alert('Data synced to cloud successfully!');
+      } else {
+        alert(error || 'Failed to sync to cloud');
+      }
+    } catch (error) {
+      console.error('Sync failed:', error);
+      alert('Failed to sync to cloud');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   return (
     <div className="px-4 py-6">
       {/* Header */}
@@ -473,6 +531,85 @@ export function SettingsScreen({
           </div>
         </div>
       </div>
+
+      {/* Cloud Sync */}
+      {isSupabaseConfigured && (
+        <div className="mb-6">
+          <h3 className="text-slate-900 mb-3 flex items-center gap-2">
+            <Cloud className="w-5 h-5" />
+            Cloud Sync <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded ml-2">Optional</span>
+          </h3>
+
+          <div className="bg-white rounded-xl shadow-sm border border-slate-100 divide-y divide-slate-100">
+            {cloudUser ? (
+              <>
+                <div className="p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-slate-900">Account</Label>
+                    <Cloud className="w-4 h-4 text-blue-600" />
+                  </div>
+                  <p className="text-sm text-slate-600 mb-3">
+                    Signed in as: <strong>{cloudUser}</strong>
+                  </p>
+                  {lastSyncTime && (
+                    <p className="text-xs text-slate-500 mb-3">
+                      Last synced: {lastSyncTime}
+                    </p>
+                  )}
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={handleCloudSync}
+                      className="flex-1 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white"
+                      disabled={isSyncing || records.length === 0}
+                    >
+                      {isSyncing ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                          Syncing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-4 h-4 mr-2" />
+                          Sync Now
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      onClick={handleCloudSignOut}
+                      variant="outline"
+                      disabled={isSyncing}
+                    >
+                      Sign Out
+                    </Button>
+                  </div>
+                </div>
+                <div className="p-4 bg-blue-50">
+                  <p className="text-xs text-blue-900 leading-relaxed">
+                    🔒 <strong>End-to-End Encrypted:</strong> Your data is encrypted on your device before upload. The server never sees your unencrypted data.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <Label className="text-slate-900">Sign in to sync</Label>
+                  <Cloud className="w-4 h-4 text-slate-400" />
+                </div>
+                <p className="text-sm text-slate-500 mb-3">
+                  Create an account to automatically sync your data across devices
+                </p>
+                <Button
+                  onClick={() => setShowCloudAuthDialog(true)}
+                  className="w-full"
+                  variant="outline"
+                >
+                  Sign In / Create Account
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Data Management */}
       <div className="mb-6">
@@ -848,6 +985,13 @@ export function SettingsScreen({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Cloud Auth Dialog */}
+      <CloudAuthDialog
+        open={showCloudAuthDialog}
+        onOpenChange={setShowCloudAuthDialog}
+        onSuccess={handleCloudAuthSuccess}
+      />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { RecordsList } from './components/RecordsList';
 import { SettingsScreen } from './components/SettingsScreen';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { SignInScreen } from './components/SignInScreen';
+import { indexedDBStorage } from './lib/storage/indexedDBStorage';
 
 export type AttachmentType = {
   id: string;
@@ -46,38 +47,79 @@ export default function App() {
   });
   const [userName, setUserName] = useState<string | null>(null);
 
-  // Load data from localStorage on mount
+  // Load data from IndexedDB on mount
   useEffect(() => {
-    const savedRecords = localStorage.getItem('recordKeeper_records');
-    const savedPin = localStorage.getItem('recordKeeper_pin');
-    const savedDecoyPin = localStorage.getItem('recordKeeper_decoyPin');
-    const lockEnabled = localStorage.getItem('recordKeeper_lockEnabled');
-    const welcomeCompleted = localStorage.getItem('recordKeeper_welcomeCompleted');
-    const savedUserName = localStorage.getItem('recordKeeper_userName');
-    
-    if (savedRecords) {
-      setRecords(JSON.parse(savedRecords));
-    }
-    if (savedPin) {
-      setPin(savedPin);
-    }
-    if (savedDecoyPin) {
-      setDecoyPin(savedDecoyPin);
-    }
-    if (lockEnabled === 'true' && savedPin) {
-      setIsLocked(true);
-    }
-    if (welcomeCompleted === 'true') {
-      setHasCompletedWelcome(true);
-    }
-    if (savedUserName) {
-      setUserName(savedUserName);
-    }
+    const loadData = async () => {
+      try {
+        // Initialize IndexedDB
+        await indexedDBStorage.initialize();
+
+        // Migrate from localStorage if this is first time
+        const hasLocalStorageData = localStorage.getItem('recordKeeper_records');
+        if (hasLocalStorageData) {
+          console.log('Migrating data from localStorage to IndexedDB...');
+          await indexedDBStorage.migrateFromLocalStorage();
+        }
+
+        // Load records from IndexedDB
+        const savedRecords = await indexedDBStorage.getRecords();
+        if (savedRecords.length > 0) {
+          setRecords(savedRecords);
+        }
+
+        // Load settings from IndexedDB
+        const savedPin = await indexedDBStorage.getSetting('recordKeeper_pin');
+        const savedDecoyPin = await indexedDBStorage.getSetting('recordKeeper_decoyPin');
+        const lockEnabled = await indexedDBStorage.getSetting('recordKeeper_lockEnabled');
+        const welcomeCompleted = await indexedDBStorage.getSetting('recordKeeper_welcomeCompleted');
+        const savedUserName = await indexedDBStorage.getSetting('recordKeeper_userName');
+
+        if (savedPin) {
+          setPin(savedPin);
+        }
+        if (savedDecoyPin) {
+          setDecoyPin(savedDecoyPin);
+        }
+        if (lockEnabled === 'true' && savedPin) {
+          setIsLocked(true);
+        }
+        if (welcomeCompleted === 'true') {
+          setHasCompletedWelcome(true);
+        }
+        if (savedUserName) {
+          setUserName(savedUserName);
+        }
+
+        console.log('Data loaded from IndexedDB successfully');
+      } catch (error) {
+        console.error('Failed to load data from IndexedDB:', error);
+        // Fallback to localStorage if IndexedDB fails
+        const savedRecords = localStorage.getItem('recordKeeper_records');
+        if (savedRecords) {
+          setRecords(JSON.parse(savedRecords));
+        }
+      }
+    };
+
+    loadData();
   }, []);
 
-  // Save records to localStorage whenever they change
+  // Save records to IndexedDB whenever they change
   useEffect(() => {
-    localStorage.setItem('recordKeeper_records', JSON.stringify(records));
+    const saveRecords = async () => {
+      try {
+        await indexedDBStorage.saveRecords(records);
+        console.log('Records saved to IndexedDB');
+      } catch (error) {
+        console.error('Failed to save records to IndexedDB:', error);
+        // Fallback to localStorage
+        localStorage.setItem('recordKeeper_records', JSON.stringify(records));
+      }
+    };
+
+    if (records.length > 0) {
+      saveRecords();
+    }
   }, [records]);
 
   const addRecord = (record: Omit<RecordType, 'id' | 'createdAt' | 'contentHash' | 'eventLog'>) => {
@@ -100,13 +142,24 @@ export default function App() {
     setRecords(records.map(r => r.id === id ? { ...r, ...updates } : r));
   };
 
-  const handleWelcomeComplete = (name?: string) => {
-    localStorage.setItem('recordKeeper_welcomeCompleted', 'true');
-    if (name) {
-      localStorage.setItem('recordKeeper_userName', name);
-      setUserName(name);
+  const handleWelcomeComplete = async (name?: string) => {
+    try {
+      await indexedDBStorage.saveSetting('recordKeeper_welcomeCompleted', 'true');
+      if (name) {
+        await indexedDBStorage.saveSetting('recordKeeper_userName', name);
+        setUserName(name);
+      }
+      setHasCompletedWelcome(true);
+    } catch (error) {
+      console.error('Failed to save welcome completion:', error);
+      // Fallback to localStorage
+      localStorage.setItem('recordKeeper_welcomeCompleted', 'true');
+      if (name) {
+        localStorage.setItem('recordKeeper_userName', name);
+        setUserName(name);
+      }
+      setHasCompletedWelcome(true);
     }
-    setHasCompletedWelcome(true);
   };
 
   console.log('hasCompletedWelcome:', hasCompletedWelcome);
@@ -154,16 +207,31 @@ export default function App() {
             pin={pin}
             decoyPin={decoyPin}
             userName={userName}
-            onPinChange={(newPin) => {
+            onPinChange={async (newPin) => {
               setPin(newPin);
-              localStorage.setItem('recordKeeper_pin', newPin);
+              try {
+                await indexedDBStorage.saveSetting('recordKeeper_pin', newPin);
+              } catch (error) {
+                console.error('Failed to save PIN to IndexedDB:', error);
+                localStorage.setItem('recordKeeper_pin', newPin);
+              }
             }}
-            onDecoyPinChange={(newDecoyPin) => {
+            onDecoyPinChange={async (newDecoyPin) => {
               setDecoyPin(newDecoyPin);
-              localStorage.setItem('recordKeeper_decoyPin', newDecoyPin);
+              try {
+                await indexedDBStorage.saveSetting('recordKeeper_decoyPin', newDecoyPin);
+              } catch (error) {
+                console.error('Failed to save decoy PIN to IndexedDB:', error);
+                localStorage.setItem('recordKeeper_decoyPin', newDecoyPin);
+              }
             }}
-            onLockToggle={(enabled) => {
-              localStorage.setItem('recordKeeper_lockEnabled', enabled.toString());
+            onLockToggle={async (enabled) => {
+              try {
+                await indexedDBStorage.saveSetting('recordKeeper_lockEnabled', enabled.toString());
+              } catch (error) {
+                console.error('Failed to save lock setting to IndexedDB:', error);
+                localStorage.setItem('recordKeeper_lockEnabled', enabled.toString());
+              }
               if (!enabled) {
                 setIsLocked(false);
               }

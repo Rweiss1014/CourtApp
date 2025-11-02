@@ -16,6 +16,7 @@ import {
 import { DEFAULT_TAXONOMY } from '../lib/hashtagTaxonomy';
 import { generateLawyerReadyReport } from '../lib/reportGenerator';
 import { pdfExport } from '../lib/pdfExport';
+import { indexedDBStorage } from '../lib/storage/indexedDBStorage';
 
 function formatDate(dateString: string) {
   const date = new Date(dateString);
@@ -54,23 +55,41 @@ export function SettingsScreen({
   const [showDecoyPinDialog, setShowDecoyPinDialog] = useState(false);
   const [newPin, setNewPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
-  const [lockEnabled, setLockEnabled] = useState(
-    localStorage.getItem('recordKeeper_lockEnabled') === 'true'
-  );
+  const [lockEnabled, setLockEnabled] = useState(false);
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [caseLabel, setCaseLabel] = useState('');
   const [taxonomy, setTaxonomy] = useState(DEFAULT_TAXONOMY);
 
   useEffect(() => {
-    const saved = localStorage.getItem('recordKeeper_taxonomy');
-    if (saved) {
-      try {
-        setTaxonomy(JSON.parse(saved));
-      } catch (e) {
-        setTaxonomy(DEFAULT_TAXONOMY);
+    const loadSettings = async () => {
+      // Load taxonomy
+      const saved = localStorage.getItem('recordKeeper_taxonomy');
+      if (saved) {
+        try {
+          setTaxonomy(JSON.parse(saved));
+        } catch (e) {
+          setTaxonomy(DEFAULT_TAXONOMY);
+        }
       }
-    }
+
+      // Load lock enabled state from IndexedDB
+      try {
+        const lockSetting = await indexedDBStorage.getSetting('recordKeeper_lockEnabled');
+        if (lockSetting === 'true') {
+          setLockEnabled(true);
+        }
+      } catch (error) {
+        console.error('Failed to load lock setting from IndexedDB:', error);
+        // Fallback to localStorage
+        const lockSetting = localStorage.getItem('recordKeeper_lockEnabled');
+        if (lockSetting === 'true') {
+          setLockEnabled(true);
+        }
+      }
+    };
+
+    loadSettings();
   }, []);
 
   const handleSetPin = () => {
@@ -180,18 +199,49 @@ export function SettingsScreen({
     URL.revokeObjectURL(url);
   };
 
-  const handleClearData = () => {
-    localStorage.removeItem('recordKeeper_records');
-    localStorage.removeItem('recordKeeper_pin');
-    localStorage.removeItem('recordKeeper_lockEnabled');
-    setShowClearDialog(false);
-    window.location.reload();
+  const handleClearData = async () => {
+    try {
+      // Clear IndexedDB
+      await indexedDBStorage.clearRecords();
+      await indexedDBStorage.saveSetting('recordKeeper_pin', null);
+      await indexedDBStorage.saveSetting('recordKeeper_lockEnabled', 'false');
+
+      // Also clear localStorage as fallback
+      localStorage.removeItem('recordKeeper_records');
+      localStorage.removeItem('recordKeeper_pin');
+      localStorage.removeItem('recordKeeper_lockEnabled');
+
+      setShowClearDialog(false);
+      window.location.reload();
+    } catch (error) {
+      console.error('Failed to clear data:', error);
+      // Fallback to just localStorage
+      localStorage.removeItem('recordKeeper_records');
+      localStorage.removeItem('recordKeeper_pin');
+      localStorage.removeItem('recordKeeper_lockEnabled');
+      setShowClearDialog(false);
+      window.location.reload();
+    }
   };
 
-  const handleResetWelcome = () => {
-    localStorage.removeItem('recordKeeper_welcomeCompleted');
-    localStorage.removeItem('recordKeeper_userName');
-    window.location.reload();
+  const handleResetWelcome = async () => {
+    try {
+      // Clear welcome settings from IndexedDB
+      await indexedDBStorage.saveSetting('recordKeeper_welcomeCompleted', null);
+      await indexedDBStorage.saveSetting('recordKeeper_userName', null);
+
+      // Also clear localStorage as fallback
+      localStorage.removeItem('recordKeeper_welcomeCompleted');
+      localStorage.removeItem('recordKeeper_userName');
+
+      window.location.reload();
+    } catch (error) {
+      console.error('Failed to reset welcome:', error);
+      // Fallback to just localStorage
+      localStorage.removeItem('recordKeeper_welcomeCompleted');
+      localStorage.removeItem('recordKeeper_userName');
+      window.location.reload();
+    }
   };
 
   return (
